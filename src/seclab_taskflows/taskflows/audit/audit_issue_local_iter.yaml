@@ -18,7 +18,7 @@ taskflow:
         - seclab_taskflow_agent.personalities.assistant
       model: general_tasks
       user_prompt: |
-        Fetch the component issues in {{ globals.repo }}.
+        Fetch all component issues for the repo {{ globals.repo }} using the get_component_issues_for_repo tool.
       toolboxes:
         - seclab_taskflows.toolboxes.repo_context
   - task:
