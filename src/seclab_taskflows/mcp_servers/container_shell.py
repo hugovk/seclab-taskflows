@@ -67,20 +67,24 @@ def _is_running(name: str) -> bool:
 
 
 def _remove_container(name: str) -> None:
-    """Remove a stopped container by name. Logs failures for diagnostics."""
+    """Remove a stopped container by name. Logs failures for diagnostics.
+
+    Uses ``docker rm`` (without -f) so that running containers are NOT
+    killed — only genuinely stopped leftovers are cleaned up.
+    """
     try:
         result = subprocess.run(
-            ["docker", "rm", "-f", name],
+            ["docker", "rm", name],
             capture_output=True,
             text=True,
             timeout=_DOCKER_TIMEOUT,
         )
         if result.returncode != 0:
-            logging.warning(
-                "docker rm -f failed for %s: %s", name, result.stderr.strip()
+            logging.debug(
+                "docker rm skipped for %s: %s", name, result.stderr.strip()
             )
     except subprocess.TimeoutExpired:
-        logging.error("docker rm -f timed out for %s after %ds", name, _DOCKER_TIMEOUT)
+        logging.error("docker rm timed out for %s after %ds", name, _DOCKER_TIMEOUT)
 
 
 def _start_container() -> str:
@@ -109,7 +113,7 @@ def _start_container() -> str:
         cmd += ["-v", f"{CONTAINER_WORKSPACE}:/workspace"]
     cmd += [CONTAINER_IMAGE, "tail", "-f", "/dev/null"]
     logging.debug(f"Starting container: {' '.join(cmd)}")
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=_DOCKER_TIMEOUT)
     if result.returncode != 0:
         msg = f"docker run failed: {result.stderr.strip()}"
         raise RuntimeError(msg)

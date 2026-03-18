@@ -235,7 +235,8 @@ class TestPersistentContainer:
             assert name.startswith("seclab-persist-")
             # Only docker inspect should be called, NOT docker run
             assert mock_run.call_count == 1
-            assert "inspect" in mock_run.call_args[0][0]
+            cmd = mock_run.call_args[0][0]
+            assert cmd == ["docker", "inspect", "--format", "json", name]
 
     def test_start_persistent_no_rm_flag(self):
         inspect_proc = _make_proc(
@@ -269,9 +270,9 @@ class TestPersistentContainer:
 
     def test_remove_container_logs_failure(self):
         with patch("subprocess.run", return_value=_make_proc(returncode=1, stderr="conflict")):
-            with patch.object(cs_mod.logging, "warning") as mock_warn:
+            with patch.object(cs_mod.logging, "debug") as mock_debug:
                 cs_mod._remove_container("test-name")
-                mock_warn.assert_called_once()
+                mock_debug.assert_called_once()
 
     def test_remove_container_logs_timeout(self):
         with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="docker", timeout=30)):
