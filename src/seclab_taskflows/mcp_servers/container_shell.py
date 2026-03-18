@@ -84,7 +84,7 @@ def _remove_container(name: str) -> None:
                 "docker rm skipped for %s: %s", name, result.stderr.strip()
             )
     except subprocess.TimeoutExpired:
-        logging.error("docker rm timed out for %s after %ds", name, _DOCKER_TIMEOUT)
+        logging.exception("docker rm timed out for %s after %ds", name, _DOCKER_TIMEOUT)
 
 
 def _start_container() -> str:
