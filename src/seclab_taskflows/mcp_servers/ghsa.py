@@ -278,19 +278,6 @@ def get_ghsas_for_repo_from_db(
     return json.dumps(backend.get_ghsas(process_repo(owner, repo)))
 
 @mcp.tool()
-def get_ghsa_with_id_from_db(
-    owner: str = Field(description="The owner of the GitHub repository"),
-    repo: str = Field(description="The name of the GitHub repository"),
-    ghsa_id: str = Field(description="The GHSA ID of the advisory"),
-):
-    """Get a GHSA advisory record with a specific GHSA ID from the database."""
-    repo_name = process_repo(owner, repo)
-    result = backend.get_ghsa(repo_name, ghsa_id)
-    if not result:
-        return f"Error: No GHSA entry exists in repo: {repo_name} and ghsa_id {ghsa_id}"
-    return json.dumps(result)
-
-@mcp.tool()
 def store_new_ghsa_summary(
     owner: str = Field(description="The owner of the GitHub repository"),
     repo: str = Field(description="The name of the GitHub repository"),
