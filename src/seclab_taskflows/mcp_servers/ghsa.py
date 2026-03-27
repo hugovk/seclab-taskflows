@@ -57,10 +57,7 @@ class GHSABackend:
     def __init__(self, db_dir: str):
         # Directory in which the GHSA SQLite database file will be stored.
         self.db_dir = db_dir
-        if not Path(self.db_dir).exists():
-            db_uri = "sqlite://"
-        else:
-            db_uri = f"sqlite:///{self.db_dir}/ghsa.db"
+        db_uri = "sqlite://" if not Path(self.db_dir).exists() else f"sqlite:///{self.db_dir}/ghsa.db"
         self.engine = create_engine(db_uri, echo=False)
         Base.metadata.create_all(
             self.engine,
