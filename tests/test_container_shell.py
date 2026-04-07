@@ -8,6 +8,7 @@ import pytest
 
 import seclab_taskflows.mcp_servers.container_shell as cs_mod
 from seclab_taskflow_agent.available_tools import AvailableTools
+from seclab_taskflow_agent.models import ToolboxDocument
 
 
 # ---------------------------------------------------------------------------
@@ -298,22 +299,22 @@ class TestToolboxYaml:
         tools = AvailableTools()
         result = tools.get_toolbox("seclab_taskflows.toolboxes.container_shell_base")
         assert result is not None
-        assert result["seclab-taskflow-agent"]["filetype"] == "toolbox"
+        assert isinstance(result, ToolboxDocument)
 
     def test_toolbox_yaml_valid_malware(self):
         tools = AvailableTools()
         result = tools.get_toolbox("seclab_taskflows.toolboxes.container_shell_malware_analysis")
         assert result is not None
-        assert result["seclab-taskflow-agent"]["filetype"] == "toolbox"
+        assert isinstance(result, ToolboxDocument)
 
     def test_toolbox_yaml_valid_network(self):
         tools = AvailableTools()
         result = tools.get_toolbox("seclab_taskflows.toolboxes.container_shell_network_analysis")
         assert result is not None
-        assert result["seclab-taskflow-agent"]["filetype"] == "toolbox"
+        assert isinstance(result, ToolboxDocument)
 
     def test_toolbox_yaml_valid_sast(self):
         tools = AvailableTools()
         result = tools.get_toolbox("seclab_taskflows.toolboxes.container_shell_sast")
         assert result is not None
-        assert result["seclab-taskflow-agent"]["filetype"] == "toolbox"
+        assert isinstance(result, ToolboxDocument)
