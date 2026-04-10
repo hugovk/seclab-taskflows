@@ -7,6 +7,7 @@ from pydantic import Field
 import httpx
 import json
 import os
+import contextlib
 from sqlalchemy.orm import DeclarativeBase, mapped_column, Mapped
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -53,7 +54,8 @@ GH_TOKEN = os.getenv("GH_TOKEN", default="")
 SEARCH_RESULT_DIR = mcp_data_dir("seclab-taskflows", "gh_file_viewer", "SEARCH_RESULTS_DIR")
 
 engine = create_engine(f"sqlite:///{os.path.abspath(SEARCH_RESULT_DIR)}/search_result.db", echo=False)
-Base.metadata.create_all(engine, tables=[SearchResults.__table__])
+with contextlib.suppress(Exception):
+    Base.metadata.create_all(engine, tables=[SearchResults.__table__])
 
 
 async def call_api(url: str, params: dict) -> str:

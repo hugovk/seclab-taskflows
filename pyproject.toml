@@ -35,6 +35,11 @@ Issues = "https://github.com/GitHubSecurityLab/seclab-taskflows/issues"
 [tool.hatch.version]
 path = "src/seclab_taskflows/__about__.py"
 
+[tool.hatch.envs.hatch-test]
+extra-dependencies = [
+  "pytest-asyncio",
+]
+
 [tool.hatch.envs.types]
 extra-dependencies = [
   "mypy>=1.0.0",
@@ -122,6 +127,7 @@ ignore = [
 ]
 
 [tool.pytest.ini_options]
+asyncio_mode = "auto"
 markers = [
   "xdist_group: Group tests to run on the same xdist worker",
 ]
