@@ -285,6 +285,15 @@ class TestListDirectoryFromGh:
             result = await gfv_mod.list_directory_from_gh.fn(owner="owner", repo="repo", path="missing")
             assert result == "HTTP error: 404"
 
+    @pytest.mark.asyncio
+    async def test_list_directory_path_is_file(self):
+        """When the path points to a file, the API returns a dict instead of a list."""
+        file_obj = {"path": "src/main.py", "type": "file", "size": 123, "sha": "abc"}
+        resp = _make_response(json_data=file_obj)
+        with patch.object(gfv_mod, "call_api", new_callable=AsyncMock, return_value=resp):
+            result = await gfv_mod.list_directory_from_gh.fn(owner="owner", repo="repo", path="src/main.py")
+            assert "not a directory" in result
+
 
 # ---------------------------------------------------------------------------
 # search_repo_from_gh tests
