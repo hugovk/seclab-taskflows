@@ -14,6 +14,9 @@ import pytest
 
 import seclab_taskflows.mcp_servers.gh_file_viewer as gfv_mod
 
+# Run all tests in this module on a single xdist worker to avoid DB races.
+pytestmark = pytest.mark.xdist_group("gh_file_viewer")
+
 
 # ---------------------------------------------------------------------------
 # Mock Contents for GitHub API responses
