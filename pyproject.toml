@@ -120,3 +120,8 @@ ignore = [
   "S101",      # Use of assert (standard in pytest)
   "SLF001",    # Private member accessed (tests legitimately access module internals)
 ]
+
+[tool.pytest.ini_options]
+markers = [
+  "xdist_group: Group tests to run on the same xdist worker",
+]

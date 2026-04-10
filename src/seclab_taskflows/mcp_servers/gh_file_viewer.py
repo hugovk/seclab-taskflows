@@ -283,10 +283,13 @@ async def list_directory_from_gh(
     r = await call_api(url=f"https://api.github.com/repos/{owner}/{repo}/contents/{path}", params={})
     if isinstance(r, str):
         return r
-    if not r.json():
+    data = r.json()
+    if not data:
         return json.dumps([], indent=2)
+    if not isinstance(data, list):
+        return f"Path '{path}' is not a directory."
 
-    content = [item["path"] for item in r.json()]
+    content = [item["path"] for item in data]
     return json.dumps(content, indent=2)
 
 
