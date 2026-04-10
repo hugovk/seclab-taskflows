@@ -168,3 +168,77 @@ The reputation score directly influences the fast-close decision (see Section 3)
 - **normal / no history** — standard four-condition fast-close applies.
 
 The score also appears in the triage report under **Reporter Reputation** for maintainer awareness.
+
+---
+
+## 5. Duplicate Detection (`compare_advisories`)
+
+The `compare_advisories` tool detects duplicate or near-duplicate advisories in a repository's triage inbox before individual triage work begins.
+
+### Fingerprint fields
+
+Each advisory is fingerprinted using these structural fields:
+
+| Field | Source |
+|---|---|
+| CWE IDs | Advisory `cwes` metadata |
+| Package (ecosystem + name) | Advisory `vulnerabilities` metadata |
+| Vulnerable version range | Advisory `vulnerabilities` metadata |
+| File paths | Extracted from description text via regex |
+| Normalized summary | Summary lowercased, non-alphanumeric stripped |
+
+### Match levels
+
+| Level | Condition |
+|---|---|
+| strong | Same package AND (same CWE or same files or same version range) |
+| moderate | Same package alone, or same CWE AND same files (no package overlap) |
+| weak | Any single field overlap (CWE only, or file paths only, etc.) |
+| none | No field overlap |
+
+### Clustering
+
+Strong and moderate matches are clustered via union-find. The batch queue output shows each cluster with its member GHSAs and match reasons.
+
+### Effect on triage
+
+- Batch scorer: strong-match clusters get "Likely Duplicate -- Triage Best" suggested action
+- Single-advisory triage: quality gate surfaces duplicate info but does NOT auto-close. Maintainers decide.
+- Triage report: Duplicate/Prior Reports section prominently flags cluster membership
+
+### Conservative design
+
+Dedup detection is intentionally conservative:
+- Only structural field overlap, no semantic similarity
+- Never auto-closes advisories based on dedup alone
+- Weak matches are surfaced as informational, not clustered
+- Maintainer always makes the final accept/reject decision
+
+---
+
+## 6. Container Validation (`pvr_triage` Task 4b)
+
+Optional automated validation using the SAST container. Gated by `PVR_CONTAINER_VALIDATION=true`.
+
+### Validation steps
+
+| Step | Tool | Purpose |
+|---|---|---|
+| Clone + checkout | git | Clone repo at affected version into container |
+| SAST scan | semgrep | Scan reported files for vulnerability patterns |
+| Reachability | pyan3 / cscope / rg | Trace call graph to determine if vuln function is reachable from public entry points |
+| PoC reproduction | shell_exec | Best-effort reproduction of provided PoC steps (safe commands only) |
+| Patch analysis | git diff | Compare affected version to HEAD to verify patch addresses the reported vulnerability |
+
+### Effect on triage
+
+- Reachability results factor into severity assessment (unreachable code = lower impact)
+- SAST findings corroborate or contradict the reporter's claims
+- PoC reproduction provides strongest evidence for confirmation
+- Patch analysis validates whether a fix exists
+
+### Prerequisites
+
+- Docker installed and running
+- `seclab-shell-sast:latest` image built (`scripts/build_container_images.sh`)
+- `PVR_CONTAINER_VALIDATION=true` set in environment

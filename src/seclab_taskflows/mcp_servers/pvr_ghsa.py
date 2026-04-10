@@ -14,6 +14,7 @@ import logging
 import os
 import re
 import subprocess
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -132,6 +133,132 @@ def _parse_advisory(raw: dict) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Advisory fingerprinting and comparison
+# ---------------------------------------------------------------------------
+
+# Common file path patterns in advisory descriptions
+_FILE_PATH_RE = re.compile(
+    r"(?:^|[\s`\"'(])([a-zA-Z0-9_.][a-zA-Z0-9_./\\-]*\.[a-zA-Z]{1,10})(?:[\s`\"'),:;]|$)",
+    re.MULTILINE,
+)
+
+# Line number references like "line 42", "L42", ":42"
+_LINE_REF_RE = re.compile(r"(?:line\s+|L|:)(\d{1,6})\b", re.IGNORECASE)
+
+# Known source file extensions (filter false positives from _FILE_PATH_RE)
+_SRC_EXTS = frozenset({
+    "py", "js", "ts", "go", "rs", "rb", "java", "c", "cpp", "cc", "h", "hpp",
+    "cs", "php", "swift", "kt", "scala", "pl", "pm", "sh", "bash", "zsh",
+    "yaml", "yml", "json", "xml", "toml", "cfg", "ini", "conf", "html",
+    "jsx", "tsx", "vue", "svelte", "erb", "ejs", "sql", "r", "m", "mm",
+})
+
+
+def _extract_file_paths(text: str) -> list[str]:
+    """Extract likely source file paths from free-form text."""
+    paths = []
+    for m in _FILE_PATH_RE.finditer(text):
+        p = m.group(1)
+        ext = p.rsplit(".", 1)[-1].lower() if "." in p else ""
+        if ext in _SRC_EXTS and "/" in p:
+            paths.append(p)
+    return sorted(set(paths))
+
+
+def _fingerprint_advisory(parsed: dict) -> dict:
+    """
+    Build a structural fingerprint from a parsed advisory.
+
+    Returns a dict with normalized, comparable fields:
+      cwes, packages, versions, file_paths, severity, summary_norm
+    """
+    desc = parsed.get("description", "")
+
+    # Normalized summary: lowercase, strip whitespace/punctuation
+    summary = parsed.get("summary", "").lower().strip()
+    summary_norm = re.sub(r"[^a-z0-9 ]", "", summary)
+
+    # Packages: (ecosystem, name) tuples
+    packages = set()
+    for v in parsed.get("vulnerabilities", []):
+        eco = v.get("ecosystem", "").lower().strip()
+        pkg = v.get("package", "").lower().strip()
+        if pkg:
+            packages.add((eco, pkg))
+
+    # Version ranges as normalized strings
+    versions = set()
+    for v in parsed.get("vulnerabilities", []):
+        vr = v.get("vulnerable_versions", "").strip()
+        if vr:
+            versions.add(vr)
+
+    return {
+        "ghsa_id": parsed.get("ghsa_id", ""),
+        "cwes": set(parsed.get("cwes", [])),
+        "packages": packages,
+        "versions": versions,
+        "file_paths": set(_extract_file_paths(desc)),
+        "severity": parsed.get("severity", "").lower(),
+        "summary_norm": summary_norm,
+    }
+
+
+def _compare_fingerprints(a: dict, b: dict) -> dict:
+    """
+    Compare two advisory fingerprints and return a similarity result.
+
+    Returns:
+      match_level: "strong", "moderate", "weak", or "none"
+      reasons: list of strings explaining why they matched
+      overlap: dict of shared fields
+    """
+    reasons = []
+    overlap = {}
+
+    # CWE overlap
+    cwe_shared = a["cwes"] & b["cwes"]
+    if cwe_shared:
+        reasons.append(f"shared CWE: {', '.join(sorted(cwe_shared))}")
+        overlap["cwes"] = sorted(cwe_shared)
+
+    # Package overlap
+    pkg_shared = a["packages"] & b["packages"]
+    if pkg_shared:
+        reasons.append(f"same package: {', '.join(f'{e}/{p}' for e, p in sorted(pkg_shared))}")
+        overlap["packages"] = [f"{e}/{p}" for e, p in sorted(pkg_shared)]
+
+    # Version range overlap
+    ver_shared = a["versions"] & b["versions"]
+    if ver_shared:
+        reasons.append(f"same version range: {', '.join(sorted(ver_shared))}")
+        overlap["versions"] = sorted(ver_shared)
+
+    # File path overlap
+    file_shared = a["file_paths"] & b["file_paths"]
+    if file_shared:
+        reasons.append(f"shared files: {', '.join(sorted(file_shared))}")
+        overlap["file_paths"] = sorted(file_shared)
+
+    # Summary similarity (exact match after normalization)
+    if a["summary_norm"] and a["summary_norm"] == b["summary_norm"]:
+        reasons.append("identical summary")
+        overlap["summary"] = True
+
+    # Determine match level
+    if not reasons:
+        level = "none"
+    elif pkg_shared and (cwe_shared or file_shared or ver_shared):
+        level = "strong"
+    elif pkg_shared or (cwe_shared and file_shared):
+        level = "moderate"
+    else:
+        level = "weak"
+
+    return {"match_level": level, "reasons": reasons, "overlap": overlap}
+
+
 @mcp.tool()
 def fetch_pvr_advisory(
     owner: str = Field(description="Repository owner (user or org name)"),
@@ -202,6 +329,133 @@ def list_pvr_advisories(
         })
 
     return json.dumps(results, indent=2)
+
+
+@mcp.tool()
+def compare_advisories(
+    owner: str = Field(description="Repository owner (user or org name)"),
+    repo: str = Field(description="Repository name"),
+    state: str = Field(
+        default="triage",
+        description="Advisory state to compare. Default: triage",
+    ),
+    target_ghsa: str = Field(
+        default="",
+        description="Optional: compare only this GHSA against the others. "
+                    "If empty, compares all advisories pairwise.",
+    ),
+) -> str:
+    """
+    Detect duplicate or near-duplicate advisories in a repository's inbox.
+
+    Fetches advisories in the given state, computes structural fingerprints
+    (CWE, package, version range, file paths, summary), and identifies
+    pairs or clusters that likely describe the same vulnerability.
+
+    When target_ghsa is set, only comparisons involving that advisory are returned.
+
+    Returns JSON with:
+      - clusters: list of {advisories: [...ghsa_ids], match_level, reasons}
+      - singles: list of ghsa_ids with no duplicates detected
+      - total: total advisory count
+    """
+    base_path = f"/repos/{owner}/{repo}/security-advisories?state={state}&per_page=100"
+    all_raw: list = []
+    page = 1
+    while page <= 50:
+        data, err = _gh_api(f"{base_path}&page={page}")
+        if err:
+            return f"Error listing advisories: {err}"
+        if not isinstance(data, list) or not data:
+            break
+        all_raw.extend(data)
+        if len(data) < 100:
+            break
+        page += 1
+
+    if len(all_raw) < 2:
+        return json.dumps({
+            "clusters": [],
+            "singles": [_parse_advisory(r).get("ghsa_id", "") for r in all_raw],
+            "total": len(all_raw),
+        }, indent=2)
+
+    # Parse and fingerprint all advisories
+    parsed = [_parse_advisory(r) for r in all_raw]
+    fps = [_fingerprint_advisory(p) for p in parsed]
+
+    # Pairwise comparison
+    # Union-find for clustering
+    id_to_idx = {fp["ghsa_id"]: i for i, fp in enumerate(fps)}
+    parent = list(range(len(fps)))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(x, y):
+        px, py = find(x), find(y)
+        if px != py:
+            parent[px] = py
+
+    matches = []
+    for i in range(len(fps)):
+        for j in range(i + 1, len(fps)):
+            if target_ghsa and fps[i]["ghsa_id"] != target_ghsa and fps[j]["ghsa_id"] != target_ghsa:
+                continue
+            result = _compare_fingerprints(fps[i], fps[j])
+            if result["match_level"] != "none":
+                matches.append({
+                    "a": fps[i]["ghsa_id"],
+                    "b": fps[j]["ghsa_id"],
+                    "match_level": result["match_level"],
+                    "reasons": result["reasons"],
+                })
+                if result["match_level"] in ("strong", "moderate"):
+                    union(i, j)
+
+    # Build clusters from union-find
+    cluster_map: dict[int, list[str]] = defaultdict(list)
+    for i, fp in enumerate(fps):
+        root = find(i)
+        cluster_map[root].append(fp["ghsa_id"])
+
+    clusters = []
+    singles = []
+    for members in cluster_map.values():
+        if len(members) > 1:
+            # Find the match details for this cluster
+            cluster_matches = [
+                m for m in matches
+                if m["a"] in members and m["b"] in members
+            ]
+            best_level = "weak"
+            all_reasons: list[str] = []
+            for cm in cluster_matches:
+                all_reasons.extend(cm["reasons"])
+                if cm["match_level"] == "strong":
+                    best_level = "strong"
+                elif cm["match_level"] == "moderate" and best_level != "strong":
+                    best_level = "moderate"
+            clusters.append({
+                "advisories": sorted(members),
+                "match_level": best_level,
+                "reasons": sorted(set(all_reasons)),
+            })
+        else:
+            singles.extend(members)
+
+    # Also include weak matches (not clustered) as informational
+    weak_matches = [m for m in matches if m["match_level"] == "weak"]
+
+    return json.dumps({
+        "clusters": clusters,
+        "weak_matches": weak_matches,
+        "singles": sorted(singles),
+        "total": len(fps),
+    }, indent=2)
 
 
 @mcp.tool()

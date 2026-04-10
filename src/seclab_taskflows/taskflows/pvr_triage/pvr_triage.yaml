@@ -113,6 +113,12 @@ taskflow:
           - vuln_type: pvr_parsed.vuln_type
           - affected_component: pvr_parsed.affected_component
 
+        Extract owner and repo from "{{ globals.repo }}" (format: owner/repo).
+        Call compare_advisories with owner, repo, state="triage",
+        and target_ghsa="{{ globals.ghsa }}" to check if this advisory is a
+        duplicate of another advisory currently in the triage inbox.
+        Store the result as dedup_result.
+
         Evaluate fast_close based on reporter_score.recommendation:
 
           If reporter_score.recommendation is "high trust":
@@ -141,8 +147,16 @@ taskflow:
             "reason": "brief explanation of why fast_close was triggered or not",
             "reporter_login": "the login extracted above",
             "reporter_score": {the full object returned by get_reporter_score},
-            "similar_reports": [the list returned by find_similar_triage_reports]
+            "similar_reports": [the list returned by find_similar_triage_reports],
+            "duplicate_advisories": {
+              "clusters": dedup_result.clusters (only clusters containing this GHSA),
+              "is_duplicate": true if this GHSA appears in any strong or moderate cluster
+            }
           }
+
+        If duplicate_advisories.is_duplicate is true, note this in the reason field
+        but do NOT auto-set fast_close. Duplicates still require human judgment.
+        The report will surface the duplicate info for the maintainer to decide.
 
   # -------------------------------------------------------------------------
   # Task 4: Verify vulnerability in source code
@@ -219,6 +233,111 @@ taskflow:
           - notes: any additional observations
 
   # -------------------------------------------------------------------------
+  # Task 4b: Container-based validation (optional)
+  # -------------------------------------------------------------------------
+  # Gated by PVR_CONTAINER_VALIDATION env var. When enabled, clones the repo
+  # at the affected version into an isolated SAST container and performs:
+  #   - SAST scanning (semgrep) on reported file paths
+  #   - Call graph / reachability analysis on reported functions
+  #   - PoC reproduction attempt if reproduction steps are provided
+  #   - Patch diff analysis between affected and fixed versions
+  #
+  # Requires Docker and the seclab-shell-sast image.
+  # Set PVR_CONTAINER_VALIDATION=true and optionally CONTAINER_WORKSPACE.
+  - task:
+      must_complete: false
+      model: triage
+      headless: true
+      agents:
+        - seclab_taskflows.personalities.pvr_analyst
+      toolboxes:
+        - seclab_taskflows.toolboxes.container_shell_sast
+        - seclab_taskflows.toolboxes.pvr_ghsa
+        - seclab_taskflow_agent.toolboxes.memcache
+      env:
+        CONTAINER_PERSIST: "true"
+        CONTAINER_PERSIST_KEY: "pvr-validation-{{ globals.ghsa }}"
+        CONTAINER_TIMEOUT: "120"
+      user_prompt: |
+        Check if container validation is enabled:
+        If the environment variable PVR_CONTAINER_VALIDATION is not set or not "true",
+        store under memcache key "container_validation":
+          {"enabled": false, "reason": "PVR_CONTAINER_VALIDATION not set"}
+        and stop immediately. Do not execute any shell commands.
+
+        Otherwise, retrieve "pvr_parsed", "pvr_description", "code_verification",
+        and "quality_gate" from memcache.
+
+        If quality_gate.fast_close is true or code_verification.vulnerability_confirmed
+        is false, store under "container_validation":
+          {"enabled": true, "skipped": true, "reason": "fast_close or unconfirmed"}
+        and stop.
+
+        Extract owner and repo from "{{ globals.repo }}" (format: owner/repo).
+
+        Perform container-based validation in the SAST container:
+
+        Step 1: Clone and checkout
+          shell_exec: git clone --depth=50 https://github.com/{owner}/{repo}.git /workspace/repo
+          If code_verification.ref_used is not null and not "HEAD":
+            shell_exec: cd /workspace/repo && git checkout {ref_used}
+
+        Step 2: SAST scan on reported files
+          For each file in pvr_parsed.affected_files (if any):
+            shell_exec: semgrep scan --config=auto --json /workspace/repo/{file}
+          Store findings as sast_results.
+
+        Step 3: Reachability analysis
+          Determine the language from file extensions in pvr_parsed.affected_files.
+          For Python projects:
+            shell_exec: cd /workspace/repo && pyan3 $(fd -e py . | tr '\n' ' ') --dot --no-defines 2>/dev/null | grep -i "{function_name}" || echo "function not found in call graph"
+          For C/C++ projects:
+            shell_exec: cd /workspace/repo && ctags -R --fields=+ne . && cscope -R -b 2>/dev/null
+            shell_exec: cd /workspace/repo && cscope -R -L -2 {function_name} 2>/dev/null || echo "no callers found"
+          For other languages:
+            shell_exec: cd /workspace/repo && rg -n "def |function |func |fn " --glob "*.{ext}" | grep -i "{function_name}" || echo "function not found"
+            shell_exec: cd /workspace/repo && rg -n "{function_name}" --glob "*.{ext}" | head -30
+          Assess: is the reported function reachable from public API / entry points?
+
+        Step 4: PoC reproduction attempt
+          If pvr_parsed.poc_provided is true and pvr_parsed.poc_summary describes
+          executable steps (curl commands, script, input data):
+            Attempt a best-effort reproduction. If it involves running code:
+              shell_exec: cd /workspace/repo && {appropriate setup and run commands}
+            Do NOT execute anything that could be destructive or contact external services.
+            If the PoC requires network access or external dependencies, note this as
+            a limitation rather than attempting it.
+
+        Step 5: Patch status verification
+          If code_verification.patch_status is "patched" or if a patched version exists:
+            shell_exec: cd /workspace/repo && git log --oneline --all --grep="{cve_id or ghsa_id or vuln keyword}" | head -10
+            shell_exec: cd /workspace/repo && git diff {affected_ref}..HEAD -- {affected_files} | head -100
+          Assess: does the diff actually address the reported vulnerability?
+
+        Store results under memcache key "container_validation":
+          {
+            "enabled": true,
+            "skipped": false,
+            "sast_findings": list of semgrep findings relevant to the reported vuln type,
+            "reachability": {
+              "function_reachable": true/false/null,
+              "call_chain": brief description of how the function is reached (or null),
+              "entry_points": list of public entry points that reach the vulnerable function
+            },
+            "poc_result": {
+              "attempted": true/false,
+              "reproduced": true/false/null,
+              "details": description of what happened
+            },
+            "patch_analysis": {
+              "patch_found": true/false,
+              "patch_addresses_vuln": true/false/null,
+              "details": description of the patch
+            },
+            "notes": any additional observations
+          }
+
+  # -------------------------------------------------------------------------
   # Task 5: Generate triage report
   # -------------------------------------------------------------------------
   - task:
@@ -229,8 +348,9 @@ taskflow:
       toolboxes:
         - seclab_taskflow_agent.toolboxes.memcache
       user_prompt: |
-        Retrieve "pvr_parsed", "pvr_description", "code_verification", and "quality_gate"
-        from memcache.
+        Retrieve "pvr_parsed", "pvr_description", "code_verification", "quality_gate",
+        and "container_validation" from memcache. container_validation may not exist
+        (if the task was skipped or not configured); treat missing as disabled.
 
         Generate a triage analysis report in markdown and store it under
         memcache key "triage_report".
@@ -261,10 +381,27 @@ taskflow:
         If unconfirmed, explain what the code actually does and why it is not vulnerable.
         If inconclusive, explain what could not be determined and why.
 
+        ### Validation Results
+
+        If container_validation exists and container_validation.enabled is true
+        and container_validation.skipped is false, include this section. Otherwise omit it.
+
+        Summarize findings from automated validation:
+        - SAST: note any semgrep findings relevant to the reported vulnerability type
+        - Reachability: state whether the reported function is reachable from public
+          entry points, and list the call chain if found. If unreachable, note this
+          significantly reduces impact.
+        - PoC Reproduction: if attempted, state whether it succeeded. If not attempted,
+          note why (e.g. requires network access, no executable steps provided).
+        - Patch Analysis: if a patch was found, summarize whether it addresses
+          the reported vulnerability.
+
         ### Severity Assessment
 
         State whether the claimed severity is accurate, overstated, or understated.
         Base this on the actual exploitability and impact from the code evidence.
+        If container_validation was performed and reachability data is available,
+        factor that into the assessment (unreachable code is lower impact).
 
         ### CVSS Assessment
 
@@ -276,9 +413,14 @@ taskflow:
 
         ### Duplicate / Prior Reports
 
+        If quality_gate.duplicate_advisories.is_duplicate is true, prominently flag this
+        advisory as a potential duplicate. List the other GHSAs in the cluster, the match
+        level, and the reasons for the match (shared CWE, package, version, file paths).
+        Recommend the maintainer review the cluster and triage the best report.
+
         If quality_gate.similar_reports is non-empty, list them with their verdict and quality.
         Note whether this report adds new evidence vs. restating a known issue.
-        If similar_reports is empty, state "No similar prior reports found."
+        If no duplicates or similar reports found, state "No duplicates or prior reports found."
 
         ### Patch Status
 

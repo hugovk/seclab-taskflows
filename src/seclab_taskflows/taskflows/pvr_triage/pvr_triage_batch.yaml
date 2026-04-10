@@ -54,7 +54,7 @@ taskflow:
         If no advisories are found, print "No triage advisories found." and stop.
 
   # -------------------------------------------------------------------------
-  # Task 2: Score each advisory
+  # Task 2: Score each advisory and detect duplicates
   # -------------------------------------------------------------------------
   - task:
       must_complete: true
@@ -69,7 +69,11 @@ taskflow:
 
         Extract owner and repo from "{{ globals.repo }}" (format: owner/repo).
 
-        For each advisory in pvr_queue:
+        First, call compare_advisories with owner, repo, and state="triage" to
+        detect duplicate or near-duplicate advisories. Store the result under
+        memcache key "dedup_result".
+
+        Then for each advisory in pvr_queue:
           1. Call fetch_pvr_advisory to get the full advisory details.
           2. Check for existing triage by calling read_triage_report with the ghsa_id.
              If the result does not start with "Report not found", mark already_triaged=true
@@ -83,9 +87,13 @@ taskflow:
              severity_weight: critical=4, high=3, medium=2, low=1, unknown=1
              quality_weight: has_file_references(+1) + has_poc(+1) + has_line_numbers(+1)
              priority_score = severity_weight + quality_weight
-          5. Determine suggested_action:
+          5. Check if this ghsa_id appears in any dedup_result.clusters entry.
+             If so, set duplicate_cluster to the list of other GHSAs in that cluster
+             and the match_level. Otherwise set duplicate_cluster=null.
+          6. Determine suggested_action:
              - If already_triaged and verdict is UNCONFIRMED or INCONCLUSIVE: "Review/Close"
              - If already_triaged and verdict is CONFIRMED: "Fix/Publish"
+             - If duplicate_cluster is not null and match_level is "strong": "Likely Duplicate — Triage Best"
              - If priority_score >= 5: "Triage Immediately"
              - If priority_score >= 3: "Triage Soon"
              - If priority_score <= 1: "Likely Low Quality — Fast Close"
@@ -93,7 +101,8 @@ taskflow:
 
         Build a list of scored entries, each with:
           {ghsa_id, severity, summary, vuln_type, quality_signals,
-           priority_score, already_triaged, verdict, suggested_action, created_at}
+           priority_score, already_triaged, verdict, suggested_action,
+           duplicate_cluster, created_at}
 
         Sort the list: primary key priority_score descending; ties broken by
         created_at ascending (oldest advisory first).
@@ -134,8 +143,8 @@ taskflow:
         **Pending triage:** [count of scored_queue entries]
         **Skipped (already triaged):** [skipped_count]
 
-        | GHSA | Age (days) | Severity | Vuln Type | Quality Signals | Priority | Status | Suggested Action |
-        |------|------------|----------|-----------|-----------------|----------|--------|-----------------|
+        | GHSA | Age (days) | Severity | Vuln Type | Quality Signals | Priority | Duplicates | Status | Suggested Action |
+        |------|------------|----------|-----------|-----------------|----------|------------|--------|-----------------|
         [one row per advisory, sorted by priority_score desc then created_at asc]
 
         For each row:
@@ -146,6 +155,8 @@ taskflow:
           - Quality Signals: compact representation, e.g. "PoC, Files, Lines" for all three,
             or list only the signals present, or "None" if all false
           - Priority: priority_score as an integer
+          - Duplicates: if duplicate_cluster is not null, show the other GHSA IDs and match
+            level (e.g. "GHSA-xxxx [strong]"). Otherwise "-"
           - Status: "Triaged (CONFIRMED)" / "Triaged (UNCONFIRMED)" / "Triaged (INCONCLUSIVE)" /
             "Not triaged"
           - Suggested Action: from suggested_action field
@@ -158,6 +169,8 @@ taskflow:
         ## Summary
 
         List any advisories with priority_score >= 5 as "Requires immediate attention."
+        If any duplicate clusters were found, list them with the shared GHSAs and match reasons.
+        Recommend triaging the highest-quality report in each cluster and closing the rest.
         If skipped_count > 0, note: "[skipped_count] already-triaged advisories skipped."
 
         Sanitize the repo name for use in a filename: replace "/" and any non-alphanumeric

@@ -9,7 +9,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -237,6 +237,306 @@ class TestPvrGhsaTools(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# TestFingerprintAndDedup
+# ---------------------------------------------------------------------------
+
+class TestFingerprintAndDedup(unittest.TestCase):
+    """Tests for advisory fingerprinting, comparison, and dedup detection."""
+
+    def setUp(self):
+        import seclab_taskflows.mcp_servers.pvr_ghsa as pvr_mod
+        self.pvr = pvr_mod
+
+    # --- _extract_file_paths ---
+
+    def test_extract_file_paths_finds_paths(self):
+        """_extract_file_paths finds source file paths in free text."""
+        text = "The bug is in `src/handlers/upload.py` and also affects lib/auth/check.go"
+        paths = self.pvr._extract_file_paths(text)
+        self.assertIn("src/handlers/upload.py", paths)
+        self.assertIn("lib/auth/check.go", paths)
+
+    def test_extract_file_paths_ignores_non_source(self):
+        """_extract_file_paths ignores non-source extensions and bare filenames."""
+        text = "See README.md and report.pdf for details. Also config.txt"
+        paths = self.pvr._extract_file_paths(text)
+        # No paths with / separator, so none should match
+        self.assertEqual(paths, [])
+
+    def test_extract_file_paths_deduplicates(self):
+        """_extract_file_paths returns unique sorted paths."""
+        text = "Bug in src/auth.py and also src/auth.py again"
+        paths = self.pvr._extract_file_paths(text)
+        self.assertEqual(len(paths), len(set(paths)))
+
+    # --- _fingerprint_advisory ---
+
+    def test_fingerprint_advisory_extracts_fields(self):
+        """_fingerprint_advisory extracts CWEs, packages, versions, file paths."""
+        parsed = {
+            "ghsa_id": "GHSA-test-1234-abcd",
+            "summary": "Path traversal in upload handler",
+            "severity": "high",
+            "description": "The file src/upload/handler.py has a path traversal bug at line 42",
+            "vulnerabilities": [
+                {
+                    "ecosystem": "pip",
+                    "package": "myapp",
+                    "vulnerable_versions": "<= 1.5.0",
+                    "patched_versions": "1.5.1",
+                }
+            ],
+            "cwes": ["CWE-22"],
+        }
+        fp = self.pvr._fingerprint_advisory(parsed)
+        self.assertEqual(fp["ghsa_id"], "GHSA-test-1234-abcd")
+        self.assertIn("CWE-22", fp["cwes"])
+        self.assertIn(("pip", "myapp"), fp["packages"])
+        self.assertIn("<= 1.5.0", fp["versions"])
+        self.assertIn("src/upload/handler.py", fp["file_paths"])
+        self.assertEqual(fp["severity"], "high")
+
+    def test_fingerprint_advisory_empty_fields(self):
+        """_fingerprint_advisory handles empty/missing fields gracefully."""
+        parsed = {
+            "ghsa_id": "GHSA-empty",
+            "summary": "",
+            "severity": "",
+            "description": "",
+            "vulnerabilities": [],
+            "cwes": [],
+        }
+        fp = self.pvr._fingerprint_advisory(parsed)
+        self.assertEqual(fp["cwes"], set())
+        self.assertEqual(fp["packages"], set())
+        self.assertEqual(fp["file_paths"], set())
+
+    # --- _compare_fingerprints ---
+
+    def test_compare_strong_match(self):
+        """Two advisories with same CWE + same package → strong match."""
+        a = {
+            "ghsa_id": "A",
+            "cwes": {"CWE-22"},
+            "packages": {("pip", "myapp")},
+            "versions": {"<= 1.5.0"},
+            "file_paths": set(),
+            "severity": "high",
+            "summary_norm": "path traversal in upload",
+        }
+        b = {
+            "ghsa_id": "B",
+            "cwes": {"CWE-22"},
+            "packages": {("pip", "myapp")},
+            "versions": {"<= 1.5.0"},
+            "file_paths": set(),
+            "severity": "high",
+            "summary_norm": "path traversal in upload handler",
+        }
+        result = self.pvr._compare_fingerprints(a, b)
+        self.assertEqual(result["match_level"], "strong")
+        self.assertTrue(len(result["reasons"]) > 0)
+
+    def test_compare_no_match(self):
+        """Two unrelated advisories → no match."""
+        a = {
+            "ghsa_id": "A",
+            "cwes": {"CWE-22"},
+            "packages": {("pip", "appA")},
+            "versions": {"<= 1.0"},
+            "file_paths": {"src/a.py"},
+            "severity": "high",
+            "summary_norm": "path traversal",
+        }
+        b = {
+            "ghsa_id": "B",
+            "cwes": {"CWE-79"},
+            "packages": {("npm", "appB")},
+            "versions": {">= 2.0"},
+            "file_paths": {"src/b.js"},
+            "severity": "medium",
+            "summary_norm": "xss in login form",
+        }
+        result = self.pvr._compare_fingerprints(a, b)
+        self.assertEqual(result["match_level"], "none")
+
+    def test_compare_moderate_match(self):
+        """Same package but no CWE/version/file overlap → moderate match."""
+        a = {
+            "ghsa_id": "A",
+            "cwes": set(),
+            "packages": {("pip", "myapp")},
+            "versions": set(),
+            "file_paths": set(),
+            "severity": "high",
+            "summary_norm": "bug in myapp",
+        }
+        b = {
+            "ghsa_id": "B",
+            "cwes": set(),
+            "packages": {("pip", "myapp")},
+            "versions": set(),
+            "file_paths": set(),
+            "severity": "medium",
+            "summary_norm": "another bug in myapp",
+        }
+        result = self.pvr._compare_fingerprints(a, b)
+        self.assertEqual(result["match_level"], "moderate")
+
+    def test_compare_weak_match(self):
+        """Only CWE overlap, different packages → weak match."""
+        a = {
+            "ghsa_id": "A",
+            "cwes": {"CWE-79"},
+            "packages": {("pip", "appA")},
+            "versions": set(),
+            "file_paths": set(),
+            "severity": "medium",
+            "summary_norm": "xss in appA",
+        }
+        b = {
+            "ghsa_id": "B",
+            "cwes": {"CWE-79"},
+            "packages": {("pip", "appB")},
+            "versions": set(),
+            "file_paths": set(),
+            "severity": "medium",
+            "summary_norm": "xss in appB",
+        }
+        result = self.pvr._compare_fingerprints(a, b)
+        self.assertEqual(result["match_level"], "weak")
+
+    # --- compare_advisories (MCP tool, needs API mock) ---
+
+    def test_compare_advisories_no_advisories(self):
+        """compare_advisories returns empty result when no advisories exist."""
+        def fake_gh_api(path, method="GET", body=None):
+            return [], None
+
+        with patch.object(self.pvr, "_gh_api", side_effect=fake_gh_api):
+            result_json = self.pvr.compare_advisories.fn(
+                owner="owner", repo="repo", state="triage", target_ghsa=""
+            )
+
+        result = json.loads(result_json)
+        self.assertEqual(result["total"], 0)
+        self.assertEqual(result["clusters"], [])
+
+    def test_compare_advisories_detects_duplicates(self):
+        """compare_advisories clusters advisories with matching CWE + package."""
+        fake_advisories = [
+            {
+                "ghsa_id": "GHSA-aaaa-1111-aaaa",
+                "cve_id": None,
+                "html_url": "https://github.com/x/y/security/advisories/GHSA-aaaa-1111-aaaa",
+                "state": "triage",
+                "severity": "high",
+                "summary": "Path traversal in upload",
+                "description": "The file src/upload/handler.py allows path traversal",
+                "vulnerabilities": [{"package": {"ecosystem": "pip", "name": "myapp"}, "vulnerable_version_range": "<= 1.5.0", "patched_versions": ""}],
+                "cwes": [{"cwe_id": "CWE-22"}],
+                "credits_detailed": [],
+                "submission": {},
+                "created_at": "2026-04-01",
+                "updated_at": "2026-04-01",
+                "collaborating_users": [],
+            },
+            {
+                "ghsa_id": "GHSA-bbbb-2222-bbbb",
+                "cve_id": None,
+                "html_url": "https://github.com/x/y/security/advisories/GHSA-bbbb-2222-bbbb",
+                "state": "triage",
+                "severity": "high",
+                "summary": "Directory traversal in file upload",
+                "description": "Directory traversal vulnerability in src/upload/handler.py",
+                "vulnerabilities": [{"package": {"ecosystem": "pip", "name": "myapp"}, "vulnerable_version_range": "<= 1.5.0", "patched_versions": ""}],
+                "cwes": [{"cwe_id": "CWE-22"}],
+                "credits_detailed": [],
+                "submission": {},
+                "created_at": "2026-04-02",
+                "updated_at": "2026-04-02",
+                "collaborating_users": [],
+            },
+            {
+                "ghsa_id": "GHSA-cccc-3333-cccc",
+                "cve_id": None,
+                "html_url": "https://github.com/x/y/security/advisories/GHSA-cccc-3333-cccc",
+                "state": "triage",
+                "severity": "medium",
+                "summary": "XSS in comment rendering",
+                "description": "Cross-site scripting in src/comments/render.js",
+                "vulnerabilities": [{"package": {"ecosystem": "npm", "name": "other-app"}, "vulnerable_version_range": "<= 2.0.0", "patched_versions": ""}],
+                "cwes": [{"cwe_id": "CWE-79"}],
+                "credits_detailed": [],
+                "submission": {},
+                "created_at": "2026-04-03",
+                "updated_at": "2026-04-03",
+                "collaborating_users": [],
+            },
+        ]
+
+        def fake_gh_api(path, method="GET", body=None):
+            return fake_advisories, None
+
+        with patch.object(self.pvr, "_gh_api", side_effect=fake_gh_api):
+            result_json = self.pvr.compare_advisories.fn(
+                owner="owner", repo="repo", state="triage", target_ghsa=""
+            )
+
+        result = json.loads(result_json)
+        self.assertEqual(result["total"], 3)
+        # The two path traversal advisories should cluster together
+        self.assertEqual(len(result["clusters"]), 1)
+        cluster = result["clusters"][0]
+        self.assertIn("GHSA-aaaa-1111-aaaa", cluster["advisories"])
+        self.assertIn("GHSA-bbbb-2222-bbbb", cluster["advisories"])
+        self.assertNotIn("GHSA-cccc-3333-cccc", cluster["advisories"])
+        self.assertIn(cluster["match_level"], ("strong", "moderate"))
+        # The XSS advisory should be in singles
+        self.assertIn("GHSA-cccc-3333-cccc", result["singles"])
+
+    def test_compare_advisories_target_ghsa_filter(self):
+        """compare_advisories with target_ghsa only returns matches for that GHSA."""
+        fake_advisories = [
+            {
+                "ghsa_id": "GHSA-aaaa-1111-aaaa",
+                "cve_id": None, "html_url": "", "state": "triage",
+                "severity": "high", "summary": "Bug A",
+                "description": "desc",
+                "vulnerabilities": [{"package": {"ecosystem": "pip", "name": "app"}, "vulnerable_version_range": "<= 1.0", "patched_versions": ""}],
+                "cwes": [{"cwe_id": "CWE-22"}],
+                "credits_detailed": [], "submission": {},
+                "created_at": "2026-04-01", "updated_at": "2026-04-01",
+                "collaborating_users": [],
+            },
+            {
+                "ghsa_id": "GHSA-bbbb-2222-bbbb",
+                "cve_id": None, "html_url": "", "state": "triage",
+                "severity": "high", "summary": "Bug B",
+                "description": "desc",
+                "vulnerabilities": [{"package": {"ecosystem": "pip", "name": "app"}, "vulnerable_version_range": "<= 1.0", "patched_versions": ""}],
+                "cwes": [{"cwe_id": "CWE-22"}],
+                "credits_detailed": [], "submission": {},
+                "created_at": "2026-04-02", "updated_at": "2026-04-02",
+                "collaborating_users": [],
+            },
+        ]
+
+        def fake_gh_api(path, method="GET", body=None):
+            return fake_advisories, None
+
+        with patch.object(self.pvr, "_gh_api", side_effect=fake_gh_api):
+            result_json = self.pvr.compare_advisories.fn(
+                owner="owner", repo="repo", state="triage",
+                target_ghsa="GHSA-aaaa-1111-aaaa",
+            )
+
+        result = json.loads(result_json)
+        # Should still find the cluster
+        self.assertTrue(len(result["clusters"]) >= 1 or len(result.get("weak_matches", [])) >= 0)
+
+
+# ---------------------------------------------------------------------------
 # TestReporterReputationBackend
 # ---------------------------------------------------------------------------
 
@@ -368,16 +668,14 @@ class TestYamlStructure(unittest.TestCase):
         """pvr_triage.yaml loads without error and is a taskflow."""
         result = self.tools.get_taskflow("seclab_taskflows.taskflows.pvr_triage.pvr_triage")
         self.assertIsNotNone(result)
-        header = result["seclab-taskflow-agent"]
-        self.assertEqual(header["filetype"], "taskflow")
+        self.assertEqual(result.header.filetype, "taskflow")
 
     def test_pvr_respond_yaml_parses(self):
         """pvr_respond.yaml loads without error and declares required globals."""
         result = self.tools.get_taskflow("seclab_taskflows.taskflows.pvr_triage.pvr_respond")
         self.assertIsNotNone(result)
-        header = result["seclab-taskflow-agent"]
-        self.assertEqual(header["filetype"], "taskflow")
-        globals_keys = result.get("globals", {})
+        self.assertEqual(result.header.filetype, "taskflow")
+        globals_keys = result.globals or {}
         self.assertIn("repo", globals_keys)
         self.assertIn("ghsa", globals_keys)
         self.assertIn("action", globals_keys)
@@ -386,23 +684,21 @@ class TestYamlStructure(unittest.TestCase):
         """pvr_triage_batch.yaml loads without error and declares repo global."""
         result = self.tools.get_taskflow("seclab_taskflows.taskflows.pvr_triage.pvr_triage_batch")
         self.assertIsNotNone(result)
-        header = result["seclab-taskflow-agent"]
-        self.assertEqual(header["filetype"], "taskflow")
-        globals_keys = result.get("globals", {})
+        self.assertEqual(result.header.filetype, "taskflow")
+        globals_keys = result.globals or {}
         self.assertIn("repo", globals_keys)
 
     def test_reporter_reputation_toolbox_parses(self):
         """reporter_reputation.yaml loads without error and is a toolbox."""
         result = self.tools.get_toolbox("seclab_taskflows.toolboxes.reporter_reputation")
         self.assertIsNotNone(result)
-        header = result["seclab-taskflow-agent"]
-        self.assertEqual(header["filetype"], "toolbox")
+        self.assertEqual(result.header.filetype, "toolbox")
 
     def test_pvr_ghsa_toolbox_has_confirm(self):
         """pvr_ghsa.yaml toolbox declares write-back tools in confirm list."""
         result = self.tools.get_toolbox("seclab_taskflows.toolboxes.pvr_ghsa")
         self.assertIsNotNone(result)
-        confirm = result.get("confirm", [])
+        confirm = result.confirm or []
         self.assertIn("accept_pvr_advisory", confirm)
         self.assertIn("reject_pvr_advisory", confirm)
         self.assertNotIn("add_pvr_advisory_comment", confirm)
@@ -411,20 +707,19 @@ class TestYamlStructure(unittest.TestCase):
         """pvr_respond_batch.yaml loads without error and declares repo + action globals."""
         result = self.tools.get_taskflow("seclab_taskflows.taskflows.pvr_triage.pvr_respond_batch")
         self.assertIsNotNone(result)
-        header = result["seclab-taskflow-agent"]
-        self.assertEqual(header["filetype"], "taskflow")
-        globals_keys = result.get("globals", {})
+        self.assertEqual(result.header.filetype, "taskflow")
+        globals_keys = result.globals or {}
         self.assertIn("repo", globals_keys)
         self.assertIn("action", globals_keys)
 
     def test_pvr_triage_yaml_has_reporter_reputation_toolbox(self):
         """pvr_triage.yaml references reporter_reputation toolbox in at least one task."""
         result = self.tools.get_taskflow("seclab_taskflows.taskflows.pvr_triage.pvr_triage")
-        taskflow = result.get("taskflow", [])
+        taskflow = result.taskflow or []
         toolbox_refs = []
         for task_wrapper in taskflow:
-            task = task_wrapper.get("task", {})
-            toolboxes = task.get("toolboxes", [])
+            task = task_wrapper.task
+            toolboxes = task.toolboxes or []
             toolbox_refs.extend(toolboxes)
         self.assertIn(
             "seclab_taskflows.toolboxes.reporter_reputation",

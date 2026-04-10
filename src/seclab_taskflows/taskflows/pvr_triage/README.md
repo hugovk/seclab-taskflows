@@ -1,6 +1,6 @@
 # PVR Triage Taskflows
 
-Tools for triaging GitHub Security Advisories submitted via [Private Vulnerability Reporting (PVR)](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability). The taskflows fetch an advisory in triage state, verify the claimed vulnerability against actual source code, score report quality, and generate a structured analysis and a ready-to-send response draft.
+Tools for triaging GitHub Security Advisories submitted via [Private Vulnerability Reporting (PVR)](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability). The taskflows fetch an advisory in triage state, verify the claimed vulnerability against actual source code, detect duplicate reports, score report quality, and generate a structured analysis and a ready-to-send response draft.
 
 Four taskflows cover the full triage lifecycle:
 
@@ -31,6 +31,8 @@ Four taskflows cover the full triage lifecycle:
 | `REPORT_DIR` | all | Directory where triage reports are written. Defaults to `./reports` |
 | `LOG_DIR` | all | Directory for MCP server logs. Auto-detected via `platformdirs` if not set |
 | `REPORTER_DB_DIR` | `pvr_triage` | Directory for the reporter reputation SQLite database. Auto-detected if not set |
+| `PVR_CONTAINER_VALIDATION` | `pvr_triage` | Set to `true` to enable container-based SAST and reachability validation. Requires Docker. |
+| `CONTAINER_WORKSPACE` | `pvr_triage` | Host directory mounted to `/workspace` in the SAST container. Optional. |
 
 A minimal `.env` for local use:
 
@@ -59,20 +61,21 @@ python -m seclab_taskflow_agent \
   -g ghsa=GHSA-xxxx-xxxx-xxxx
 ```
 
-### What it does (8 tasks)
+### What it does (9 tasks)
 
 1. **Initialize** — clears the in-memory cache.
 2. **Fetch & parse** — fetches the advisory from the GitHub API and extracts structured metadata: vulnerability type, affected component, file references, PoC quality signals, reporter credits.
-3. **Quality gate** — calls `get_reporter_score` for the reporter's history and `find_similar_triage_reports` to detect duplicates. Computes `fast_close` using a reputation-gated decision tree:
+3. **Quality gate** — calls `get_reporter_score` for the reporter's history, `find_similar_triage_reports` to find prior reports, and `compare_advisories` to detect duplicates in the current triage inbox. Computes `fast_close` using a reputation-gated decision tree:
    - **high-trust reporter** → always `fast_close = false` (full verification).
    - **skepticism reporter** → `fast_close = true` when all three quality signals are absent (prior similar report not required).
    - **normal / no history** → `fast_close = true` only when all three signals are absent *and* a prior similar report exists.
-   Fast-close skips deep code analysis.
+   Fast-close skips deep code analysis. Duplicate detection results are surfaced in the report but never trigger automatic fast-close.
 4. **Code verification** — resolves the claimed version to a git tag/SHA, fetches the relevant source files, and checks whether the vulnerability pattern is actually present. After verifying at the claimed version, also checks HEAD to determine patch status (`still_vulnerable` / `patched` / `could_not_determine`). Skipped automatically when `fast_close` is true.
-5. **Report generation** — writes a markdown report covering: Verdict, Code Verification, Severity Assessment, CVSS 3.1 assessment, Duplicate/Prior Reports, Patch Status, Report Quality, Reporter Reputation, and Recommendations.
-6. **Save report** — writes the report to `REPORT_DIR/<GHSA-ID>_triage.md` and prints the path.
-7. **Response draft** — drafts a plain-text reply to the reporter (≤200 words, no markdown headers) tailored to the verdict: acknowledge + credit for CONFIRMED, cite evidence for UNCONFIRMED, explain missing info for INCONCLUSIVE, or request specific details for fast-close.
-8. **Update reputation + save response** — records the triage outcome in the reporter reputation database and saves the response draft to `REPORT_DIR/<GHSA-ID>_response_triage.md`.
+5. **Container validation** (optional) — when `PVR_CONTAINER_VALIDATION=true`, clones the repo at the affected version into an isolated SAST container and performs: semgrep scanning on reported files, call graph / reachability analysis on reported functions (pyan3 for Python, cscope for C/C++), best-effort PoC reproduction, and patch diff analysis. Skipped when not enabled or when fast-close is active.
+6. **Report generation** — writes a markdown report covering: Verdict, Code Verification, Validation Results (if container validation ran), Severity Assessment, CVSS 3.1 assessment, Duplicate/Prior Reports, Patch Status, Report Quality, Reporter Reputation, and Recommendations.
+7. **Save report** — writes the report to `REPORT_DIR/<GHSA-ID>_triage.md` and prints the path.
+8. **Response draft** — drafts a plain-text reply to the reporter (≤200 words, no markdown headers) tailored to the verdict: acknowledge + credit for CONFIRMED, cite evidence for UNCONFIRMED, explain missing info for INCONCLUSIVE, or request specific details for fast-close.
+9. **Update reputation + save response** — records the triage outcome in the reporter reputation database and saves the response draft to `REPORT_DIR/<GHSA-ID>_response_triage.md`.
 
 ### Report structure
 
@@ -87,6 +90,7 @@ python -m seclab_taskflow_agent \
 **[CONFIRMED / UNCONFIRMED / INCONCLUSIVE]**
 
 ### Code Verification
+### Validation Results          (only when container validation ran)
 ### Severity Assessment
 ### CVSS Assessment
 ### Duplicate / Prior Reports
@@ -115,10 +119,11 @@ Saved to `REPORT_DIR/batch_queue_<repo>_<date>.md`:
 ```markdown
 # PVR Batch Triage Queue: owner/repo
 
-| GHSA | Age (days) | Severity | Vuln Type | Quality Signals | Priority | Status | Suggested Action |
-|------|------------|----------|-----------|-----------------|----------|--------|-----------------|
-| GHSA-... | 14 | high | SQL injection | PoC, Files | 6 | Not triaged | Triage Immediately |
-| GHSA-... | 3 | medium | XSS | None | 1 | Not triaged | Likely Low Quality — Fast Close |
+| GHSA | Age (days) | Severity | Vuln Type | Quality Signals | Priority | Duplicates | Status | Suggested Action |
+|------|------------|----------|-----------|-----------------|----------|------------|--------|-----------------|
+| GHSA-... | 14 | high | SQL injection | PoC, Files | 6 | - | Not triaged | Triage Immediately |
+| GHSA-... | 7 | high | SQL injection | PoC | 4 | GHSA-... [strong] | Not triaged | Likely Duplicate -- Triage Best |
+| GHSA-... | 3 | medium | XSS | None | 1 | - | Not triaged | Likely Low Quality -- Fast Close |
 ```
 
 Rows are sorted by priority score descending; ties are broken by `created_at` ascending (oldest advisory first).
@@ -205,6 +210,59 @@ Prints a final count and a reminder to post each response draft manually.
 ### Applied markers
 
 `pvr_respond` also calls `mark_response_sent` after a successful state transition, keeping single-advisory and bulk runs in sync. Once a marker exists, neither `pvr_respond` nor `pvr_respond_batch` will re-process it.
+
+---
+
+## Duplicate Detection
+
+Both `pvr_triage` and `pvr_triage_batch` use the `compare_advisories` tool to detect duplicate or near-duplicate advisories in the triage inbox.
+
+**How it works:** Each advisory is fingerprinted using structural fields (CWE IDs, package, version range, file paths from description). Pairs with overlapping fields are flagged with a match level:
+
+| Level | Meaning |
+|---|---|
+| strong | Same package AND (same CWE or same files or same version range) |
+| moderate | Same package alone, or CWE + files overlap |
+| weak | Any single field overlap |
+
+**In batch mode:** The scored queue table includes a Duplicates column showing cluster membership. Clusters of strong/moderate matches get the "Likely Duplicate -- Triage Best" action.
+
+**In single-advisory mode:** The quality gate checks for duplicates and surfaces the info in the report, but never auto-closes. Maintainers always decide.
+
+See [SCORING.md](SCORING.md) Section 5 for full details.
+
+---
+
+## Container Validation (optional)
+
+When `PVR_CONTAINER_VALIDATION=true`, `pvr_triage` performs automated validation in an isolated Docker container running the SAST image (`seclab-shell-sast:latest`).
+
+### What it does
+
+1. **Clone + checkout** — clones the repo and checks out the affected version.
+2. **SAST scan** — runs semgrep on reported file paths.
+3. **Reachability analysis** — traces the call graph to determine if the reported function is reachable from public entry points (pyan3 for Python, cscope for C/C++, grep-based for others).
+4. **PoC reproduction** — attempts best-effort reproduction of provided PoC steps (safe commands only; no network access or destructive operations).
+5. **Patch analysis** — diffs the affected version against HEAD to verify whether a fix exists and addresses the reported vulnerability.
+
+### Prerequisites
+
+```bash
+# Build the SAST container image
+./scripts/build_container_images.sh
+
+# Enable container validation
+export PVR_CONTAINER_VALIDATION=true
+```
+
+### Effect on triage
+
+- Unreachable functions → severity downgrade in the assessment
+- Semgrep findings → corroborate or contradict reporter claims
+- Successful PoC reproduction → strongest confirmation evidence
+- Results appear in the **Validation Results** section of the triage report
+
+See [SCORING.md](SCORING.md) Section 6 for full details.
 
 ---
 
