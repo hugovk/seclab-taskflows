@@ -116,8 +116,20 @@ taskflow:
         Extract owner and repo from "{{ globals.repo }}" (format: owner/repo).
         Call compare_advisories with owner, repo, state="triage",
         and target_ghsa="{{ globals.ghsa }}" to check if this advisory is a
-        duplicate of another advisory currently in the triage inbox.
+        structural duplicate of another advisory currently in the triage inbox.
         Store the result as dedup_result.
+
+        Note: compare_advisories uses structural field overlap only. A result
+        of "none" means insufficient metadata to determine, not necessarily
+        that the advisories are distinct.
+
+        Additionally, if dedup_result contains other advisories (even with
+        match_level "none"), read the summaries and descriptions of the other
+        triage-state advisories returned in the comparison. Use your own
+        judgment to determine if any describe the same underlying vulnerability
+        as this one, even if the structural metadata differs. Two reports about
+        the same code path, attack scenario, or root cause are duplicates
+        regardless of CWE tags or wording.
 
         Evaluate fast_close based on reporter_score.recommendation:
 
@@ -149,8 +161,11 @@ taskflow:
             "reporter_score": {the full object returned by get_reporter_score},
             "similar_reports": [the list returned by find_similar_triage_reports],
             "duplicate_advisories": {
-              "clusters": dedup_result.clusters (only clusters containing this GHSA),
-              "is_duplicate": true if this GHSA appears in any strong or moderate cluster
+              "structural_clusters": dedup_result.clusters (only clusters containing this GHSA),
+              "semantic_duplicates": list of other GHSA IDs you identified as describing
+                the same vulnerability via semantic analysis (may be empty),
+              "is_duplicate": true if this GHSA appears in any structural cluster
+                (strong or moderate) OR you identified semantic duplicates
             }
           }
 

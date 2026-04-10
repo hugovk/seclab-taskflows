@@ -256,7 +256,9 @@ def _compare_fingerprints(a: dict, b: dict) -> dict:
     else:
         level = "weak"
 
-    return {"match_level": level, "reasons": reasons, "overlap": overlap}
+    return {"match_level": level, "reasons": reasons, "overlap": overlap,
+            "note": "structural comparison only; 'none' means insufficient "
+                    "metadata overlap, not necessarily distinct vulnerabilities"}
 
 
 @mcp.tool()
