@@ -10,6 +10,7 @@ import os
 import contextlib
 from sqlalchemy.orm import DeclarativeBase, mapped_column, Mapped
 from sqlalchemy import create_engine
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 from typing import Optional
 from pathlib import Path
@@ -54,7 +55,7 @@ GH_TOKEN = os.getenv("GH_TOKEN", default="")
 SEARCH_RESULT_DIR = mcp_data_dir("seclab-taskflows", "gh_file_viewer", "SEARCH_RESULTS_DIR")
 
 engine = create_engine(f"sqlite:///{os.path.abspath(SEARCH_RESULT_DIR)}/search_result.db", echo=False)
-with contextlib.suppress(Exception):
+with contextlib.suppress(OperationalError):
     Base.metadata.create_all(engine, tables=[SearchResults.__table__])
 
 
