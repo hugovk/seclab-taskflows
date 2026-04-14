@@ -35,6 +35,11 @@ Issues = "https://github.com/GitHubSecurityLab/seclab-taskflows/issues"
 [tool.hatch.version]
 path = "src/seclab_taskflows/__about__.py"
 
+[tool.hatch.envs.hatch-test]
+extra-dependencies = [
+  "pytest-asyncio==1.3.0",
+]
+
 [tool.hatch.envs.types]
 extra-dependencies = [
   "mypy>=1.0.0",
@@ -119,4 +124,9 @@ ignore = [
 "tests/*" = [
   "S101",      # Use of assert (standard in pytest)
   "SLF001",    # Private member accessed (tests legitimately access module internals)
+]
+
+[tool.pytest.ini_options]
+markers = [
+  "xdist_group: Group tests to run on the same xdist worker",
 ]

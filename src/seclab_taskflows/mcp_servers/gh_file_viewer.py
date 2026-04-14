@@ -9,6 +9,7 @@ import json
 import os
 from sqlalchemy.orm import DeclarativeBase, mapped_column, Mapped
 from sqlalchemy import create_engine
+import sqlalchemy.exc
 from sqlalchemy.orm import Session
 from typing import Optional
 from pathlib import Path
@@ -53,7 +54,11 @@ GH_TOKEN = os.getenv("GH_TOKEN", default="")
 SEARCH_RESULT_DIR = mcp_data_dir("seclab-taskflows", "gh_file_viewer", "SEARCH_RESULTS_DIR")
 
 engine = create_engine(f"sqlite:///{os.path.abspath(SEARCH_RESULT_DIR)}/search_result.db", echo=False)
-Base.metadata.create_all(engine, tables=[SearchResults.__table__])
+
+try:
+    Base.metadata.create_all(engine, tables=[SearchResults.__table__])
+except sqlalchemy.exc.OperationalError as e:
+    logging.exception(f"Database/Tables already exist(s)") # only log here, as this error likely only happens in test 
 
 
 async def call_api(url: str, params: dict) -> str:
@@ -283,10 +288,13 @@ async def list_directory_from_gh(
     r = await call_api(url=f"https://api.github.com/repos/{owner}/{repo}/contents/{path}", params={})
     if isinstance(r, str):
         return r
-    if not r.json():
+    data = r.json()
+    if not data:
         return json.dumps([], indent=2)
+    if not isinstance(data, list):
+        return f"Path '{path}' is not a directory."
 
-    content = [item["path"] for item in r.json()]
+    content = [item["path"] for item in data]
     return json.dumps(content, indent=2)
 
 
