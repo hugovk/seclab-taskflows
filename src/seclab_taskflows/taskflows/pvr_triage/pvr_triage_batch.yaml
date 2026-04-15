@@ -52,9 +52,11 @@ taskflow:
 
         Store the full JSON list under memcache key "pvr_queue".
 
-        Print: "Found N triage advisories for {{ globals.repo }}." where N is the count.
+        Print: "Found N {{ globals.state }} advisories for {{ globals.repo }}." where N is the count.
 
-        If no advisories are found, print "No triage advisories found." and stop.
+        If no advisories are found, print "No {{ globals.state }} advisories found." and stop.
+
+        Execute all steps above, then stop. Do not ask what to do next.
 
   # -------------------------------------------------------------------------
   # Task 2: Score each advisory and detect duplicates
@@ -138,6 +140,8 @@ taskflow:
         Store scored_queue under memcache key "scored_queue".
         Store skipped_count under memcache key "skipped_count".
 
+        Execute all steps above, then stop. Do not ask what to do next.
+
   # -------------------------------------------------------------------------
   # Task 3: Generate and save ranked queue report
   # -------------------------------------------------------------------------
@@ -206,3 +210,5 @@ taskflow:
 
         Print: "Batch queue report saved to: <path returned by save_triage_report>"
         Then print the full report.
+
+        Execute all steps above, then stop. Do not ask what to do next.

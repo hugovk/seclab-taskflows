@@ -11,7 +11,7 @@ seclab-taskflow-agent:
 
 models:
   # Primary model for code analysis and triage reasoning
-  triage: claude-opus-4.6-1m
+  triage: claude-opus-4.6
   # Lighter model for structured data extraction tasks
   extraction: gpt-5-mini
 

@@ -95,6 +95,8 @@ taskflow:
         is returned (non-empty), store it under memcache key "security_policy".
         If no policy is found, store an empty string.
 
+        Execute all steps above, then stop. Do not ask what to do next.
+
   # -------------------------------------------------------------------------
   # Task 3: Quick Quality Gate
   # -------------------------------------------------------------------------
@@ -208,6 +210,8 @@ taskflow:
         but do NOT auto-set fast_close. Duplicates still require human judgment.
         The report will surface the duplicate info for the maintainer to decide.
 
+        Execute all steps above, then stop. Do not ask what to do next.
+
   # -------------------------------------------------------------------------
   # Task 4: Verify vulnerability in source code
   # -------------------------------------------------------------------------
@@ -281,6 +285,8 @@ taskflow:
           - patch_status: "still_vulnerable" | "patched" | "could_not_determine"
           - patch_notes: description of HEAD state vs claimed version (or null)
           - notes: any additional observations
+
+        Execute all steps above, then stop. Do not ask what to do next.
 
   # -------------------------------------------------------------------------
   # Task 4b: Container-based validation (optional)
@@ -530,6 +536,8 @@ taskflow:
             "quality": "High" | "Medium" | "Low"
           }
 
+        Execute all steps above, then stop. Do not ask what to do next.
+
   # -------------------------------------------------------------------------
   # Task 6: Save report to disk and print path
   # -------------------------------------------------------------------------
@@ -592,6 +600,8 @@ taskflow:
         for a GitHub comment.
 
         Store under memcache key "response_draft".
+
+        Execute all steps above, then stop. Do not ask what to do next.
 
   # -------------------------------------------------------------------------
   # Task 8: Update Reporter Reputation + Save Response Draft
