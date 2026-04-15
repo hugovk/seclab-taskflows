@@ -73,7 +73,7 @@ cmd_tools() {
     echo "--- list_pvr_advisories (state=draft) ---"
     ADVISORIES=$(python -c "
 import seclab_taskflows.mcp_servers.pvr_ghsa as pvr
-print(pvr.list_pvr_advisories(owner='anticomputer', repo='vulnerable-test-app', state='draft'))
+print(pvr.list_pvr_advisories.fn(owner='anticomputer', repo='vulnerable-test-app', state='draft'))
 ")
     COUNT=$(echo "$ADVISORIES" | python -c "import sys,json; print(len(json.load(sys.stdin)))")
     if [ "$COUNT" -ge 1 ]; then
@@ -93,7 +93,7 @@ for a in json.load(sys.stdin):
     GHSA=$(echo "$ADVISORIES" | python -c "import sys,json; print(json.load(sys.stdin)[0]['ghsa_id'])")
     DETAIL=$(python -c "
 import seclab_taskflows.mcp_servers.pvr_ghsa as pvr
-print(pvr.fetch_pvr_advisory(owner='anticomputer', repo='vulnerable-test-app', ghsa_id='${GHSA}'))
+print(pvr.fetch_pvr_advisory.fn(owner='anticomputer', repo='vulnerable-test-app', ghsa_id='${GHSA}'))
 ")
     if echo "$DETAIL" | python -c "import sys,json; d=json.load(sys.stdin); assert d['ghsa_id']" 2>/dev/null; then
         ok "Fetched ${GHSA}: $(echo "$DETAIL" | python -c "import sys,json; d=json.load(sys.stdin); print(f\"{d['severity']} - CWEs: {d['cwes']}\")")"
@@ -105,7 +105,7 @@ print(pvr.fetch_pvr_advisory(owner='anticomputer', repo='vulnerable-test-app', g
     echo "--- fetch_security_policy ---"
     POLICY=$(python -c "
 import seclab_taskflows.mcp_servers.pvr_ghsa as pvr
-print(pvr.fetch_security_policy(owner='anticomputer', repo='vulnerable-test-app'))
+print(pvr.fetch_security_policy.fn(owner='anticomputer', repo='vulnerable-test-app'))
 ")
     if [ -n "$POLICY" ]; then
         ok "Security policy found ($(echo "$POLICY" | wc -l | tr -d ' ') lines)"
@@ -119,7 +119,7 @@ print(pvr.fetch_security_policy(owner='anticomputer', repo='vulnerable-test-app'
     echo "--- compare_advisories (dedup detection) ---"
     DEDUP=$(python -c "
 import seclab_taskflows.mcp_servers.pvr_ghsa as pvr
-print(pvr.compare_advisories(owner='anticomputer', repo='vulnerable-test-app', state='draft', target_ghsa=''))
+print(pvr.compare_advisories.fn(owner='anticomputer', repo='vulnerable-test-app', state='draft', target_ghsa=''))
 ")
     CLUSTERS=$(echo "$DEDUP" | python -c "import sys,json; print(len(json.load(sys.stdin)['clusters']))")
     TOTAL=$(echo "$DEDUP" | python -c "import sys,json; print(json.load(sys.stdin)['total'])")
@@ -139,7 +139,7 @@ for s in d['singles']:
     echo "--- fetch_file_at_ref (main.go lines 25-30) ---"
     CODE=$(python -c "
 import seclab_taskflows.mcp_servers.pvr_ghsa as pvr
-print(pvr.fetch_file_at_ref(owner='anticomputer', repo='vulnerable-test-app', path='main.go', ref='main', start_line=25, length=6))
+print(pvr.fetch_file_at_ref.fn(owner='anticomputer', repo='vulnerable-test-app', path='main.go', ref='main', start_line=25, length=6))
 ")
     if echo "$CODE" | grep -q "searchHandler"; then
         ok "Fetched vulnerable code at main.go:25"
@@ -152,7 +152,7 @@ print(pvr.fetch_file_at_ref(owner='anticomputer', repo='vulnerable-test-app', pa
     echo "--- resolve_version_ref (0.0.1 -- expected to fail, no tags) ---"
     VER=$(python -c "
 import seclab_taskflows.mcp_servers.pvr_ghsa as pvr
-print(pvr.resolve_version_ref(owner='anticomputer', repo='vulnerable-test-app', version='0.0.1'))
+print(pvr.resolve_version_ref.fn(owner='anticomputer', repo='vulnerable-test-app', version='0.0.1'))
 ")
     if echo "$VER" | grep -q "Could not resolve"; then
         ok "Graceful failure: no tags in repo (expected)"
@@ -200,7 +200,7 @@ cmd_triage() {
         # Pick the high-quality SQL injection report
         ghsa=$(python -c "
 import json, seclab_taskflows.mcp_servers.pvr_ghsa as pvr
-advs = json.loads(pvr.list_pvr_advisories(owner='anticomputer', repo='vulnerable-test-app', state='draft'))
+advs = json.loads(pvr.list_pvr_advisories.fn(owner='anticomputer', repo='vulnerable-test-app', state='draft'))
 for a in advs:
     if 'SQL' in a['summary'] or 'sql' in a['summary'].lower():
         print(a['ghsa_id'])
