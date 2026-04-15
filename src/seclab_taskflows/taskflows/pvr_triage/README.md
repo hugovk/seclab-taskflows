@@ -59,6 +59,13 @@ python -m seclab_taskflow_agent \
   -t seclab_taskflows.taskflows.pvr_triage.pvr_triage \
   -g repo=owner/repo \
   -g ghsa=GHSA-xxxx-xxxx-xxxx
+
+# For testing with owner-created advisories (draft state instead of triage):
+python -m seclab_taskflow_agent \
+  -t seclab_taskflows.taskflows.pvr_triage.pvr_triage \
+  -g repo=owner/repo \
+  -g ghsa=GHSA-xxxx-xxxx-xxxx \
+  -g state=draft
 ```
 
 ### What it does (9 tasks)
@@ -111,6 +118,12 @@ Lists advisories in triage state for a repository, scores each unprocessed one b
 python -m seclab_taskflow_agent \
   -t seclab_taskflows.taskflows.pvr_triage.pvr_triage_batch \
   -g repo=owner/repo
+
+# For testing with owner-created advisories (draft state instead of triage):
+python -m seclab_taskflow_agent \
+  -t seclab_taskflows.taskflows.pvr_triage.pvr_triage_batch \
+  -g repo=owner/repo \
+  -g state=draft
 ```
 
 ### Output
@@ -218,7 +231,9 @@ Prints a final count and a reminder to post each response draft manually.
 
 Both `pvr_triage` and `pvr_triage_batch` use the `compare_advisories` tool to detect duplicate or near-duplicate advisories in the triage inbox.
 
-**How it works:** Each advisory is fingerprinted using structural fields (CWE IDs, package, version range, file paths from description). Pairs with overlapping fields are flagged with a match level:
+**How it works:** Dedup uses two layers:
+
+1. **Structural comparison** (`compare_advisories` tool) -- fingerprints each advisory by CWE IDs, package, version range, and file paths from the description. Pairs with overlapping fields are flagged:
 
 | Level | Meaning |
 |---|---|
@@ -226,9 +241,11 @@ Both `pvr_triage` and `pvr_triage_batch` use the `compare_advisories` tool to de
 | moderate | Same package alone, or CWE + files overlap |
 | weak | Any single field overlap |
 
-**In batch mode:** The scored queue table includes a Duplicates column showing cluster membership. Clusters of strong/moderate matches get the "Likely Duplicate -- Triage Best" action.
+2. **Semantic analysis** (agent judgment) -- the agent reads all advisory descriptions and identifies groups that describe the same vulnerability even when structural metadata differs. Catches duplicates that use different wording, cite different CWEs, or lack structured metadata entirely (common with low-quality reports). A structural match of "none" means insufficient metadata, not necessarily distinct vulnerabilities.
 
-**In single-advisory mode:** The quality gate checks for duplicates and surfaces the info in the report, but never auto-closes. Maintainers always decide.
+**In batch mode:** The scored queue table includes a Duplicates column showing cluster membership. Strong structural matches get the "Likely Duplicate -- Triage Best" action. Semantic duplicates identified by the agent are added with match level "semantic".
+
+**In single-advisory mode:** The quality gate checks for both structural and semantic duplicates and surfaces the info in the report, but never auto-closes. Maintainers always decide.
 
 See [SCORING.md](SCORING.md) Section 5 for full details.
 
@@ -358,7 +375,7 @@ The taskflows use `seclab_taskflows.configs.model_config_pvr_triage`, which defi
 
 | Role | Used for | Default model |
 |---|---|---|
-| `triage` | Code verification and report generation | `claude-opus-4.6-1m` |
+| `triage` | Code verification and report generation | `claude-opus-4.6` |
 | `extraction` | Fetch/parse, quality gate, save tasks | `gpt-5-mini` |
 
 Override the model config by setting `AI_API_ENDPOINT` and `AI_API_TOKEN` to point at a compatible provider.
@@ -375,3 +392,41 @@ All files are written to `REPORT_DIR` (default: `./reports`).
 | `<GHSA-ID>_response_triage.md` | `pvr_triage` task 8 | Plain-text response draft for the reporter |
 | `<GHSA-ID>_response_sent.md` | `pvr_respond` / `pvr_respond_batch` | Marker: state transition applied (contains ISO timestamp); post draft manually |
 | `batch_queue_<repo>_<date>.md` | `pvr_triage_batch` task 3 | Ranked inbox table with Age column |
+
+---
+
+## Globals reference
+
+| Global | Taskflow | Default | Description |
+|---|---|---|---|
+| `repo` | all | (required) | Repository in `owner/repo` format |
+| `ghsa` | `pvr_triage`, `pvr_respond` | (required) | GHSA ID of the advisory |
+| `action` | `pvr_respond`, `pvr_respond_batch` | (required) | `accept` or `reject` |
+| `state` | `pvr_triage`, `pvr_triage_batch` | `triage` | Advisory state to filter. Use `draft` for testing with owner-created advisories. |
+
+---
+
+## Demo script
+
+A demo script is included for live testing against a test repository:
+
+```bash
+# Test all MCP tools against live API (no AI calls, fast):
+./scripts/demo_pvr_triage.sh tools
+
+# Run batch scoring:
+./scripts/demo_pvr_triage.sh batch
+
+# Run full triage on a specific advisory:
+./scripts/demo_pvr_triage.sh triage GHSA-xxxx-xxxx-xxxx
+
+# Run everything:
+./scripts/demo_pvr_triage.sh all
+```
+
+The demo script uses `gh auth token` for GitHub API access and
+`passage show github/capi-token` for the AI endpoint token. Override
+with `GH_TOKEN` and `AI_API_TOKEN` environment variables.
+
+Set `ADVISORY_STATE=triage` to test against real PVR submissions
+(default is `draft` for the test repository).
