@@ -51,7 +51,7 @@ class TestPvrGhsaTools(unittest.TestCase):
             return {"ghsa_id": "GHSA-1234-5678-abcd", "state": "draft"}, None
 
         with patch.object(self.pvr, "_gh_api", side_effect=fake_gh_api):
-            result = self.pvr.accept_pvr_advisory(
+            result = self.pvr.accept_pvr_advisory.fn(
                 owner="owner",
                 repo="repo",
                 ghsa_id="GHSA-1234-5678-abcd",
@@ -73,7 +73,7 @@ class TestPvrGhsaTools(unittest.TestCase):
             return {"ghsa_id": "GHSA-1234-5678-abcd", "state": "closed"}, None
 
         with patch.object(self.pvr, "_gh_api", side_effect=fake_gh_api):
-            result = self.pvr.reject_pvr_advisory(
+            result = self.pvr.reject_pvr_advisory.fn(
                 owner="owner",
                 repo="repo",
                 ghsa_id="GHSA-1234-5678-abcd",
@@ -99,7 +99,7 @@ class TestPvrGhsaTools(unittest.TestCase):
         )
 
         with _patch_report_dir(report_dir):
-            result_json = self.pvr.find_similar_triage_reports(
+            result_json = self.pvr.find_similar_triage_reports.fn(
                 vuln_type="path traversal",
                 affected_component="upload handler",
             )
@@ -120,7 +120,7 @@ class TestPvrGhsaTools(unittest.TestCase):
         )
 
         with _patch_report_dir(report_dir):
-            result_json = self.pvr.find_similar_triage_reports(
+            result_json = self.pvr.find_similar_triage_reports.fn(
                 vuln_type="XSS",
                 affected_component="login form",
             )
@@ -132,7 +132,7 @@ class TestPvrGhsaTools(unittest.TestCase):
         """find_similar_triage_reports returns empty list for non-existent REPORT_DIR."""
         empty_dir = self.tmp / "nonexistent"
         with _patch_report_dir(empty_dir):
-            result_json = self.pvr.find_similar_triage_reports(
+            result_json = self.pvr.find_similar_triage_reports.fn(
                 vuln_type="IDOR",
                 affected_component="profile",
             )
@@ -144,7 +144,7 @@ class TestPvrGhsaTools(unittest.TestCase):
     def test_save_triage_report_path_sanitization(self):
         """save_triage_report strips path traversal characters from the GHSA ID."""
         with _patch_report_dir(self.tmp):
-            out_path = self.pvr.save_triage_report(
+            out_path = self.pvr.save_triage_report.fn(
                 ghsa_id="../../../etc/passwd",
                 report="malicious content",
             )
@@ -159,7 +159,7 @@ class TestPvrGhsaTools(unittest.TestCase):
     def test_save_triage_report_empty_after_sanitization(self):
         """save_triage_report returns an error when ghsa_id is all special chars."""
         with _patch_report_dir(self.tmp):
-            result = self.pvr.save_triage_report(
+            result = self.pvr.save_triage_report.fn(
                 ghsa_id="!@#$%^&*()",
                 report="some content",
             )
@@ -173,14 +173,14 @@ class TestPvrGhsaTools(unittest.TestCase):
         (self.tmp / "GHSA-test_triage.md").write_text(content, encoding="utf-8")
 
         with _patch_report_dir(self.tmp):
-            result = self.pvr.read_triage_report(ghsa_id="GHSA-test")
+            result = self.pvr.read_triage_report.fn(ghsa_id="GHSA-test")
 
         self.assertEqual(result, content)
 
     def test_read_triage_report_missing_file(self):
         """read_triage_report returns an error string for a missing report."""
         with _patch_report_dir(self.tmp):
-            result = self.pvr.read_triage_report(ghsa_id="GHSA-does-not-exist")
+            result = self.pvr.read_triage_report.fn(ghsa_id="GHSA-does-not-exist")
 
         self.assertIn("not found", result.lower())
 
@@ -189,7 +189,7 @@ class TestPvrGhsaTools(unittest.TestCase):
     def test_list_pending_responses_empty(self):
         """list_pending_responses returns [] when no response drafts exist."""
         with _patch_report_dir(self.tmp):
-            result_json = self.pvr.list_pending_responses()
+            result_json = self.pvr.list_pending_responses.fn()
         results = json.loads(result_json)
         self.assertEqual(results, [])
 
@@ -199,7 +199,7 @@ class TestPvrGhsaTools(unittest.TestCase):
             "Response draft.", encoding="utf-8"
         )
         with _patch_report_dir(self.tmp):
-            result_json = self.pvr.list_pending_responses()
+            result_json = self.pvr.list_pending_responses.fn()
         results = json.loads(result_json)
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["ghsa_id"], "GHSA-1111-2222-3333")
@@ -213,7 +213,7 @@ class TestPvrGhsaTools(unittest.TestCase):
             "Response sent: 2026-03-03T00:00:00+00:00\n", encoding="utf-8"
         )
         with _patch_report_dir(self.tmp):
-            result_json = self.pvr.list_pending_responses()
+            result_json = self.pvr.list_pending_responses.fn()
         results = json.loads(result_json)
         self.assertEqual(results, [])
 
@@ -222,7 +222,7 @@ class TestPvrGhsaTools(unittest.TestCase):
     def test_mark_response_sent_creates_marker(self):
         """mark_response_sent creates a _response_sent.md marker and returns its path."""
         with _patch_report_dir(self.tmp):
-            result = self.pvr.mark_response_sent(ghsa_id="GHSA-1111-2222-3333")
+            result = self.pvr.mark_response_sent.fn(ghsa_id="GHSA-1111-2222-3333")
         marker = self.tmp / "GHSA-1111-2222-3333_response_sent.md"
         self.assertTrue(marker.exists())
         self.assertTrue(result.startswith(str(self.tmp.resolve())))
@@ -232,7 +232,7 @@ class TestPvrGhsaTools(unittest.TestCase):
     def test_mark_response_sent_empty_ghsa_id(self):
         """mark_response_sent returns an error string when ghsa_id sanitizes to empty."""
         with _patch_report_dir(self.tmp):
-            result = self.pvr.mark_response_sent(ghsa_id="!@#$%")
+            result = self.pvr.mark_response_sent.fn(ghsa_id="!@#$%")
         self.assertIn("Error", result)
 
     # --- fetch_security_policy ---
@@ -252,7 +252,7 @@ class TestPvrGhsaTools(unittest.TestCase):
             return mock_result
 
         with patch("subprocess.run", side_effect=fake_run):
-            result = self.pvr.fetch_security_policy(owner="acme", repo="widget")
+            result = self.pvr.fetch_security_policy.fn(owner="acme", repo="widget")
 
         self.assertIn("Security Policy", result)
         self.assertIn("Supported Versions", result)
@@ -266,7 +266,7 @@ class TestPvrGhsaTools(unittest.TestCase):
             return mock_result
 
         with patch("subprocess.run", side_effect=fake_run):
-            result = self.pvr.fetch_security_policy(owner="acme", repo="widget")
+            result = self.pvr.fetch_security_policy.fn(owner="acme", repo="widget")
 
         self.assertEqual(result, "")
 
@@ -449,7 +449,7 @@ class TestFingerprintAndDedup(unittest.TestCase):
             return [], None
 
         with patch.object(self.pvr, "_gh_api", side_effect=fake_gh_api):
-            result_json = self.pvr.compare_advisories(
+            result_json = self.pvr.compare_advisories.fn(
                 owner="owner", repo="repo", state="triage", target_ghsa=""
             )
 
@@ -514,7 +514,7 @@ class TestFingerprintAndDedup(unittest.TestCase):
             return fake_advisories, None
 
         with patch.object(self.pvr, "_gh_api", side_effect=fake_gh_api):
-            result_json = self.pvr.compare_advisories(
+            result_json = self.pvr.compare_advisories.fn(
                 owner="owner", repo="repo", state="triage", target_ghsa=""
             )
 
@@ -561,7 +561,7 @@ class TestFingerprintAndDedup(unittest.TestCase):
             return fake_advisories, None
 
         with patch.object(self.pvr, "_gh_api", side_effect=fake_gh_api):
-            result_json = self.pvr.compare_advisories(
+            result_json = self.pvr.compare_advisories.fn(
                 owner="owner", repo="repo", state="triage",
                 target_ghsa="GHSA-aaaa-1111-aaaa",
             )
