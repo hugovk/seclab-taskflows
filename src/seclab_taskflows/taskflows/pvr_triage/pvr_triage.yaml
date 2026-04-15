@@ -30,6 +30,9 @@ globals:
   repo:
   # GHSA ID of the advisory to triage
   ghsa:
+  # Advisory state to filter by for dedup comparison (default: triage).
+  # Use "draft" for testing with owner-created advisories.
+  state: triage
 
 taskflow:
   # -------------------------------------------------------------------------
@@ -146,7 +149,7 @@ taskflow:
           - affected_component: pvr_parsed.affected_component
 
         Extract owner and repo from "{{ globals.repo }}" (format: owner/repo).
-        Call compare_advisories with owner, repo, state="triage",
+        Call compare_advisories with owner, repo, state="{{ globals.state }}",
         and target_ghsa="{{ globals.ghsa }}" to check if this advisory is a
         structural duplicate of another advisory currently in the triage inbox.
         Store the result as dedup_result.

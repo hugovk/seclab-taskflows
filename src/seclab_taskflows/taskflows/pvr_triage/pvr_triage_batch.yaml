@@ -28,6 +28,9 @@ model_config: seclab_taskflows.configs.model_config_pvr_triage
 globals:
   # GitHub repository in owner/repo format
   repo:
+  # Advisory state to filter by (default: triage). Use "draft" for testing
+  # with owner-created advisories.
+  state: triage
 
 taskflow:
   # -------------------------------------------------------------------------
@@ -44,8 +47,8 @@ taskflow:
       user_prompt: |
         Extract owner and repo from "{{ globals.repo }}" (format: owner/repo).
 
-        Call list_pvr_advisories with owner, repo, and state="triage" to retrieve
-        all advisories in triage state.
+        Call list_pvr_advisories with owner, repo, and state="{{ globals.state }}" to retrieve
+        all advisories in {{ globals.state }} state.
 
         Store the full JSON list under memcache key "pvr_queue".
 
@@ -69,7 +72,7 @@ taskflow:
 
         Extract owner and repo from "{{ globals.repo }}" (format: owner/repo).
 
-        First, call compare_advisories with owner, repo, and state="triage" to
+        First, call compare_advisories with owner, repo, and state="{{ globals.state }}" to
         detect duplicate or near-duplicate advisories via structural metadata
         comparison. Store the result under memcache key "dedup_result".
 
