@@ -262,6 +262,44 @@ def _compare_fingerprints(a: dict, b: dict) -> dict:
 
 
 @mcp.tool()
+def fetch_security_policy(
+    owner: str = Field(description="Repository owner (user or org name)"),
+    repo: str = Field(description="Repository name"),
+) -> str:
+    """
+    Fetch the repository's SECURITY.md security policy.
+
+    Checks the standard locations in order: /SECURITY.md, /.github/SECURITY.md,
+    /docs/SECURITY.md. Also checks the org-level .github repo as a fallback.
+    Returns the policy content, or an empty string if no policy is found.
+    """
+    # Standard locations per GitHub docs
+    candidates = [
+        f"/repos/{owner}/{repo}/contents/SECURITY.md",
+        f"/repos/{owner}/{repo}/contents/.github/SECURITY.md",
+        f"/repos/{owner}/{repo}/contents/docs/SECURITY.md",
+        # Org-level fallback (.github repo)
+        f"/repos/{owner}/.github/contents/SECURITY.md",
+    ]
+
+    cmd_base = ["gh", "api", "--method", "GET", "-H", "Accept: application/vnd.github.raw+json"]
+    env = os.environ.copy()
+
+    for api_path in candidates:
+        try:
+            result = subprocess.run(
+                [*cmd_base, api_path],
+                capture_output=True, text=True, env=env, timeout=15,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            continue
+        if result.returncode == 0 and result.stdout.strip():
+            logging.info("Security policy found at %s", api_path)
+            return result.stdout
+    return ""
+
+
+@mcp.tool()
 def fetch_pvr_advisory(
     owner: str = Field(description="Repository owner (user or org name)"),
     repo: str = Field(description="Repository name"),

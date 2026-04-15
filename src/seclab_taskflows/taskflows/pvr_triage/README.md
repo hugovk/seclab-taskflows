@@ -64,8 +64,8 @@ python -m seclab_taskflow_agent \
 ### What it does (9 tasks)
 
 1. **Initialize** — clears the in-memory cache.
-2. **Fetch & parse** — fetches the advisory from the GitHub API and extracts structured metadata: vulnerability type, affected component, file references, PoC quality signals, reporter credits.
-3. **Quality gate** — calls `get_reporter_score` for the reporter's history, `find_similar_triage_reports` to find prior reports, and `compare_advisories` to detect duplicates in the current triage inbox. Computes `fast_close` using a reputation-gated decision tree:
+2. **Fetch & parse** — fetches the advisory from the GitHub API and extracts structured metadata: vulnerability type, affected component, file references, PoC quality signals, reporter credits. Also fetches the repository's SECURITY.md security policy (if one exists) for policy compliance evaluation.
+3. **Quality gate** — calls `get_reporter_score` for the reporter's history, `find_similar_triage_reports` to find prior reports, and `compare_advisories` to detect duplicates in the current triage inbox. If a security policy was found, evaluates the report against it (scope, required elements, exclusions). Computes `fast_close` using a reputation-gated decision tree:
    - **high-trust reporter** → always `fast_close = false` (full verification).
    - **skepticism reporter** → `fast_close = true` when all three quality signals are absent (prior similar report not required).
    - **normal / no history** → `fast_close = true` only when all three signals are absent *and* a prior similar report exists.
@@ -95,6 +95,7 @@ python -m seclab_taskflow_agent \
 ### CVSS Assessment
 ### Duplicate / Prior Reports
 ### Patch Status
+### Security Policy Compliance  (only when repo has SECURITY.md)
 ### Report Quality
 ### Reporter Reputation
 ### Recommendations

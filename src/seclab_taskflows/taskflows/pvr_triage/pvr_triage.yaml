@@ -88,6 +88,10 @@ taskflow:
 
         Do not perform any code analysis yet.
 
+        Also call fetch_security_policy with owner and repo. If a security policy
+        is returned (non-empty), store it under memcache key "security_policy".
+        If no policy is found, store an empty string.
+
   # -------------------------------------------------------------------------
   # Task 3: Quick Quality Gate
   # -------------------------------------------------------------------------
@@ -101,13 +105,41 @@ taskflow:
         - seclab_taskflows.toolboxes.pvr_ghsa
         - seclab_taskflows.toolboxes.reporter_reputation
       user_prompt: |
-        Retrieve "pvr_parsed" from memcache.
+        Retrieve "pvr_parsed" and "security_policy" from memcache.
 
         Extract reporter login from pvr_parsed.credits: find the first entry with
         type "reporter" and use its login. If credits is empty or no reporter type
         is found, use "unknown".
 
         Call get_reporter_score with that login and store the result as reporter_score.
+
+        If security_policy is non-empty, evaluate the PVR report against the
+        repository's security policy. Check:
+          - Scope: does the reported vulnerability type and component fall within
+            the scope defined by the policy? If the policy defines supported versions,
+            is the reported version in scope?
+          - Required elements: does the report contain what the policy asks reporters
+            to include (e.g. reproduction steps, impact assessment, affected versions)?
+          - Reporting channel: the report was submitted via PVR which is generally
+            the correct private channel, but note if the policy specifies a different
+            preferred channel (e.g. email, HackerOne).
+          - Out-of-scope: does the policy explicitly exclude certain vulnerability
+            classes, test environments, or components that match this report?
+
+        Store the evaluation under the key "policy_compliance" as:
+          {
+            "policy_found": true,
+            "in_scope": true/false/null (null if policy doesn't define scope),
+            "version_in_scope": true/false/null,
+            "required_elements_present": list of elements met,
+            "required_elements_missing": list of elements the policy asks for but
+              the report does not provide,
+            "out_of_scope_match": true if the report matches an explicit exclusion,
+            "notes": brief summary of compliance assessment
+          }
+
+        If security_policy is empty, store:
+          {"policy_found": false}
 
         Call find_similar_triage_reports with:
           - vuln_type: pvr_parsed.vuln_type
@@ -364,8 +396,8 @@ taskflow:
         - seclab_taskflow_agent.toolboxes.memcache
       user_prompt: |
         Retrieve "pvr_parsed", "pvr_description", "code_verification", "quality_gate",
-        and "container_validation" from memcache. container_validation may not exist
-        (if the task was skipped or not configured); treat missing as disabled.
+        "policy_compliance", and "container_validation" from memcache.
+        container_validation and policy_compliance may not exist; treat missing as disabled/not found.
 
         Generate a triage analysis report in markdown and store it under
         memcache key "triage_report".
@@ -443,6 +475,22 @@ taskflow:
         If patched: note the triage impact (lower urgency for confirmed vulnerabilities).
         If still_vulnerable: note urgency is unchanged.
         If could_not_determine: state that HEAD status could not be assessed.
+
+        ### Security Policy Compliance
+
+        If policy_compliance exists and policy_compliance.policy_found is true,
+        include this section. Otherwise omit it entirely.
+
+        Summarize how the PVR report aligns with the repository's security policy:
+        - Scope: is the reported vulnerability in scope per the policy?
+          If a supported versions table exists, is the reported version covered?
+        - Required elements: list what the policy asks for and whether this report
+          provides each element (e.g. reproduction steps, impact, affected versions).
+        - Out-of-scope: note if the report matches any explicit exclusion in the policy.
+        - Channel: note if the policy prefers a different reporting channel than PVR.
+        - Conclusion: state whether the report is compliant, partially compliant,
+          or non-compliant with the security policy. This helps the maintainer
+          decide whether to engage or redirect the reporter.
 
         ### Report Quality
 

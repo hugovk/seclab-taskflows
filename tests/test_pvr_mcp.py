@@ -235,6 +235,41 @@ class TestPvrGhsaTools(unittest.TestCase):
             result = self.pvr.mark_response_sent.fn(ghsa_id="!@#$%")
         self.assertIn("Error", result)
 
+    # --- fetch_security_policy ---
+
+    def test_fetch_security_policy_found(self):
+        """fetch_security_policy returns content when SECURITY.md exists."""
+        policy_text = "# Security Policy\n\n## Supported Versions\n| 1.x | yes |"
+
+        def fake_run(cmd, **kwargs):
+            mock_result = MagicMock()
+            if "SECURITY.md" in cmd[-1] and ".github" not in cmd[-1]:
+                mock_result.returncode = 0
+                mock_result.stdout = policy_text
+            else:
+                mock_result.returncode = 1
+                mock_result.stdout = ""
+            return mock_result
+
+        with patch("subprocess.run", side_effect=fake_run):
+            result = self.pvr.fetch_security_policy.fn(owner="acme", repo="widget")
+
+        self.assertIn("Security Policy", result)
+        self.assertIn("Supported Versions", result)
+
+    def test_fetch_security_policy_not_found(self):
+        """fetch_security_policy returns empty string when no policy exists."""
+        def fake_run(cmd, **kwargs):
+            mock_result = MagicMock()
+            mock_result.returncode = 1
+            mock_result.stdout = ""
+            return mock_result
+
+        with patch("subprocess.run", side_effect=fake_run):
+            result = self.pvr.fetch_security_policy.fn(owner="acme", repo="widget")
+
+        self.assertEqual(result, "")
+
 
 # ---------------------------------------------------------------------------
 # TestFingerprintAndDedup
