@@ -453,7 +453,7 @@ def compare_advisories(
                     "match_level": result["match_level"],
                     "reasons": result["reasons"],
                 })
-                if result["match_level"] in ("strong", "moderate"):
+                if result["match_level"] == "strong":
                     union(i, j)
 
     # Build clusters from union-find
